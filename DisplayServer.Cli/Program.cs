@@ -5,6 +5,8 @@ using SixLabors.ImageSharp.Processing;
 using SixLabors.ImageSharp.Processing.Processors.Dithering;
 using SixLabors.ImageSharp.Formats.Bmp;
 using SixLabors.ImageSharp.PixelFormats;
+using Iot.Device.BuildHat.Sensors;
+using SixLabors.ImageSharp.Formats.Png;
 
 namespace DisplayServer.Cli;
 
@@ -26,63 +28,95 @@ class Program
         const string blackCanvasFilename = "../out/canvas-black.bmp";
         const string redCanvasFilename = "../out/canvas-red.bmp";
 
-        // todo:
-        // 1. Resize images to fit.
-        // 2. Black canvas: a) Convert to grayscale b) Floyd–Steinberg to 1-bit image
-        // 3. Red canvas: a) take only red channel (red-scale) b) Floyd–Steinberg to 1-bit image
+        var sourceImage = "../in/landscape-color.jpg";
+        // var sourceImage = "../in/red-tulips.jpg";
+        // var sourceImage = "../in/this-is-fine.jpg";
+        // var sourceImage = "../in/tank.png";
 
-        // var input = "../in/sample-black.png";
-        // var input = "../in/landscape-color.jpg";
-        // var input = "../in/red-tulips.jpg";
-        // var input = "../in/this-is-fine.jpg";
-        var input = "../in/tank.png";
+        var renderImage = true;
+        // renderImage = false;
 
+        const string input = "../in/input.png";
 
-        using (var sourceImage = Image.Load(input))
+        var black = Color.Black;
+        var white = Color.White;
+        var red = Color.Red;
+        // var red = new Color(new Rgb24(255, 64, 64));
+        // var red = new Color(new Rgb24(255 - 128, 0, 0));
+
+        var blackPixel = black.ToPixel<Rgb24>();
+        var whitePixel = white.ToPixel<Rgb24>();
+        var redPixel = red.ToPixel<Rgb24>();
+
+        // Preprocessing
+        using (var canvas = Image.Load<Rgb24>(sourceImage))
         {
             // Resize to fit
+            var inputAspectRatio = ((double)canvas.Width) / canvas.Height;
+            if (inputAspectRatio > AspectRatio)
             {
-                var inputAspectRatio = ((double)sourceImage.Width) / sourceImage.Height;
-                if (inputAspectRatio > AspectRatio)
-                {
-                    // Pad height
-                    sourceImage.Mutate(x => x.Pad(sourceImage.Width, (int)(sourceImage.Width / AspectRatio), Color.White));
-                }
-                else
-                {
-                    // Pad width
-                    sourceImage.Mutate(x => x.Pad((int)(sourceImage.Height * AspectRatio), sourceImage.Height, Color.White));
-                }
-
-                // Resize to target size (and now target aspect ratio)
-                sourceImage.Mutate(x => x.Resize(Width, Height));
+                // Pad height
+                canvas.Mutate(x => x.Pad(canvas.Width, (int)(canvas.Width / AspectRatio), white));
+            }
+            else
+            {
+                // Pad width
+                canvas.Mutate(x => x.Pad((int)(canvas.Height * AspectRatio), canvas.Height, white));
             }
 
-            // Dither down to White, Black, Red
-            {
-                var palette = new ReadOnlyMemory<Color>([Color.White, Color.Black, Color.Red]);
-                sourceImage.Mutate(x => x.ApplyProcessor(new PaletteDitherProcessor(ErrorDither.FloydSteinberg, palette)));
+            // Resize to target size (and now target aspect ratio)
+            canvas.Mutate(x => x.Resize(Width, Height));
 
-                sourceImage.SaveAsBmp(canvasFilename, new BmpEncoder() { BitsPerPixel = BmpBitsPerPixel.Pixel2 });
+            // Lighten up greens and blues
+            for (int y = 0; y < canvas.Height; y++)
+            {
+                for (int x = 0; x < canvas.Width; x++)
+                {
+                    var pixel = canvas[x, y];
+                    var r = pixel.R;
+                    var g = pixel.G;
+                    var b = pixel.B;
+
+                    var gScale = 1.4f;
+                    var bScale = 1.6f;
+                    // r = (byte)Math.Min(255, (int)r * scale);
+                    g = (byte)Math.Min(255, g * gScale);
+                    b = (byte)Math.Min(255, b * bScale);
+
+                    canvas[x, y] = new Rgb24(r, g, b);
+                }
             }
+
+            canvas.Mutate(x => x.Saturate(0.6f));
+            // canvas.Mutate(x => x.Contrast(0.9f));
+            // canvas.Mutate(x => x.Lightness(1.1f));
+            // canvas.Mutate(x => x.Brightness(1.1f));
+
+            canvas.SaveAsPng(input);
+        }
+
+        // Dithering
+        using (var canvas = Image.Load(input))
+        {
+            var palette = new ReadOnlyMemory<Color>([white, black, red]);
+            canvas.Mutate(x => x.ApplyProcessor(new PaletteDitherProcessor(ErrorDither.FloydSteinberg, palette)));
+
+            canvas.SaveAsBmp(canvasFilename, new BmpEncoder()
+            {
+                BitsPerPixel = BmpBitsPerPixel.Pixel2,
+            });
         }
 
         // Create blacks canvas
         using (var canvas = Image.Load<Rgb24>(canvasFilename))
         {
-            var black = Color.Black.ToPixel<Rgb24>();
-            var white = Color.White.ToPixel<Rgb24>();
-
             for (int y = 0; y < canvas.Height; y++)
             {
                 for (int x = 0; x < canvas.Width; x++)
                 {
                     var pixel = canvas[x, y];
 
-                    if (pixel != black)
-                    {
-                        canvas[x, y] = white;
-                    }
+                    canvas[x, y] = pixel == blackPixel ? blackPixel : whitePixel;
                 }
             }
 
@@ -92,33 +126,26 @@ class Program
         // Create reds canvas
         using (var canvas = Image.Load<Rgb24>(canvasFilename))
         {
-            var red = Color.Red.ToPixel<Rgb24>();
-            var white = Color.White.ToPixel<Rgb24>();
-
             for (int y = 0; y < canvas.Height; y++)
             {
                 for (int x = 0; x < canvas.Width; x++)
                 {
                     var pixel = canvas[x, y];
 
-                    if (pixel != red)
-                    {
-                        canvas[x, y] = white;
-                    }
+                    canvas[x, y] = pixel == redPixel ? blackPixel : whitePixel;
                 }
             }
 
             canvas.SaveAsBmp(redCanvasFilename, new BmpEncoder() { BitsPerPixel = BmpBitsPerPixel.Pixel1 });
         }
 
-        return;
-
         // Display image
+        if (renderImage)
         {
             var pyProcArgs = $"display_interface.py --blacks {blackCanvasFilename} --reds {redCanvasFilename}";
             var pythonProcessStartInfo = new ProcessStartInfo
             {
-                WorkingDirectory = "/home/pi/code/DisplayServer/Scripts/",
+                WorkingDirectory = "../Scripts/",
                 FileName = "python",
                 Arguments = pyProcArgs
             };
